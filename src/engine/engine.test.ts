@@ -267,3 +267,103 @@ describe('导入：非法则整份拒绝并保留上次有效表', () => {
     }
   });
 });
+
+describe('修订号语义：空编辑不落修订、确认只提交一次、取消保留快照', () => {
+  it('对已有格提交完全相同的整数/公式：不重算、不递增修订号、状态对象保持不变', () => {
+    const e = make({ A1: '8', B1: '=A1+1' });
+    const rev = e.getSnapshot().revision;
+    const b1State = e.getSnapshot().states.get('B1');
+
+    expect(e.setCell('A1', '8').ok).toBe(true);
+    expect(e.setCell('B1', '=A1+1').ok).toBe(true);
+    expect(e.getSnapshot().revision).toBe(rev);
+    // 未触发重算：沿用同一结果对象
+    expect(e.getSnapshot().states.get('B1')).toBe(b1State);
+    expect(val(e, 'B1')).toBe('9');
+  });
+
+  it('对空格再次提交空文本：不产生修订', () => {
+    const e = make({ A1: '1' });
+    const rev = e.getSnapshot().revision;
+    expect(e.setCell('B1', '').ok).toBe(true);
+    expect(e.setCell('B1', '   ').ok).toBe(true);
+    expect(e.getSnapshot().revision).toBe(rev);
+    expect(e.getSnapshot().raw.has('B1')).toBe(false);
+  });
+
+  it('真实修改只递增一次修订号，下游精确结果随一次确认更新', () => {
+    const e = make({ A1: '2', B1: '=A1+1', C1: '=B1*10' });
+    const rev = e.getSnapshot().revision;
+    e.setCell('A1', '5');
+    expect(e.getSnapshot().revision).toBe(rev + 1);
+    expect(val(e, 'A1')).toBe('5');
+    expect(val(e, 'B1')).toBe('6');
+    expect(val(e, 'C1')).toBe('60');
+  });
+
+  it('清空有内容的格是一次真实修改（修订 +1），再次提交空文本则为空操作', () => {
+    const e = make({ A1: '10', B1: '=A1+1' });
+    const rev = e.getSnapshot().revision;
+    e.setCell('A1', '');
+    expect(e.getSnapshot().revision).toBe(rev + 1);
+    expect(val(e, 'B1')).toBe('1');
+    e.setCell('A1', '');
+    expect(e.getSnapshot().revision).toBe(rev + 1);
+  });
+
+  it('空编辑不使有效预演过期：预演在两种空编辑后仍可采纳', () => {
+    const e = make({ A1: '2', B1: '=A1+1' });
+    const p = e.previewHypothesis([{ addr: 'A1', raw: '5' }]);
+    const rev = e.getSnapshot().revision;
+    // 模拟公式栏未改字符即离开、网格双击进入原样离开
+    e.setCell('A1', '2');
+    e.setCell('B1', '=A1+1');
+    expect(e.getSnapshot().revision).toBe(rev);
+    const r = e.commitHypothesis(p);
+    expect(r.ok).toBe(true);
+    expect(r.stale).toBeUndefined();
+    expect(val(e, 'A1')).toBe('5');
+    expect(val(e, 'B1')).toBe('6');
+  });
+
+  it('Esc 取消等价的不提交路径：正式格、下游与修订号全部保持原样，预演仍有效', () => {
+    const e = make({ A1: '0', B1: '=1/A1', C1: '=B1+2' });
+    const p = e.previewHypothesis([{ addr: 'C1', raw: '=B1+3' }]);
+    const rev = e.getSnapshot().revision;
+    // 用户在公式栏输入了未确认的值后 Esc：引擎从未收到 setCell，
+    // 这里仅重复空操作以断言“取消不写格、不重算、不加修订”
+    e.setCell('A1', '0');
+    expect(e.getSnapshot().revision).toBe(rev);
+    expect(e.getRaw('A1')).toBe('0');
+    expect(err(e, 'B1')!.type).toBe('divzero');
+    expect(err(e, 'C1')!.type).toBe('divzero');
+    expect(err(e, 'C1')!.path).toEqual(['B1', 'C1']);
+    const r = e.commitHypothesis(p);
+    expect(r.ok).toBe(true);
+    // 采纳的是“真实有效的版本”：C1 修改时 B1 仍是除零，下游错误照常传播
+    expect(err(e, 'C1')!.type).toBe('divzero');
+    expect(err(e, 'C1')!.source).toBe('B1');
+  });
+
+  it('导出 JSON 的 revision 与一次确认动作后的修订号一一对应', () => {
+    const e = make({ A1: '1' });
+    const rev0 = e.getSnapshot().revision;
+    const f0 = JSON.parse(exportSnapshot(e.getSnapshot())) as { revision: number };
+    expect(f0.revision).toBe(rev0);
+
+    e.setCell('A1', '42');
+    const rev1 = e.getSnapshot().revision;
+    expect(rev1).toBe(rev0 + 1);
+    const f1 = JSON.parse(exportSnapshot(e.getSnapshot())) as {
+      revision: number;
+      cells: { addr: string; raw: string }[];
+    };
+    expect(f1.revision).toBe(rev1);
+    expect(f1.cells.find((c) => c.addr === 'A1')!.raw).toBe('42');
+
+    // 空编辑后导出仍是同一版本
+    e.setCell('A1', '42');
+    const f2 = JSON.parse(exportSnapshot(e.getSnapshot())) as { revision: number };
+    expect(f2.revision).toBe(rev1);
+  });
+});

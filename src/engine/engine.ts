@@ -374,11 +374,14 @@ export class SheetEngine {
     if (!inBounds(key)) {
       return { ok: false, errors: [`地址 ${key} 超出 A1..T20`] };
     }
-    const trimmed = text;
-    if (trimmed.trim() === '') {
+    // 聚焦 / 退出编辑但未改动任何字符时，不产生新修订：
+    // 原文与现内容一致（含原本就为空的格再次提交空文本）直接作为空操作返回，
+    // 既不重算也不递增修订号，预演不会因此被判过期。
+    if (text.trim() === '') {
       if (!this.raw.has(key)) return { ok: true };
       this.raw.delete(key);
     } else {
+      if (this.raw.get(key) === text) return { ok: true };
       this.raw.set(key, text);
     }
     this.recompute(new Set([key]));

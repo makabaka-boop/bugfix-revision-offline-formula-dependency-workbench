@@ -45,9 +45,12 @@ export function Cell({
 }: CellProps) {
   const [draft, setDraft] = useState(state?.raw ?? '');
   const inputRef = useRef<HTMLInputElement>(null);
+  /** 本次编辑会话是否已由 Enter/Esc/Tab 终结，防止随后失焦再次提交（取消也不得落格） */
+  const settledRef = useRef(false);
 
   useEffect(() => {
     if (editing) {
+      settledRef.current = false;
       setDraft(state?.raw ?? '');
       inputRef.current?.focus();
     }
@@ -76,19 +79,28 @@ export function Cell({
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
         onBlur={() => {
+          // Enter/Esc/Tab 已终结本次会话则忽略失焦；
+          // 普通失焦（点击别处）视为确认，内容未变时引擎侧不产生修订
+          if (settledRef.current) return;
+          settledRef.current = true;
           onCommit(draft);
           onEndEdit();
         }}
         onKeyDown={(e) => {
           if (e.key === 'Enter') {
+            // 先标记终结：可能触发的失焦不再二次提交，一次确认只产生一次修订
+            settledRef.current = true;
             onCommit(draft);
             onEndEdit();
             onMove(1, 0);
             e.preventDefault();
           } else if (e.key === 'Escape') {
+            // 取消：不提交草稿，标记终结以防失焦把未确认内容写入正式格
+            settledRef.current = true;
             onEndEdit();
             e.preventDefault();
           } else if (e.key === 'Tab') {
+            settledRef.current = true;
             onCommit(draft);
             onEndEdit();
             onMove(0, e.shiftKey ? -1 : 1);

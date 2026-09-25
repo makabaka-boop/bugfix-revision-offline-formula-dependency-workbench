@@ -31,6 +31,10 @@ export function App() {
   const [editing, setEditing] = useState<Addr | null>(null);
   const [barDraft, setBarDraft] = useState('');
   const [barEditing, setBarEditing] = useState(false);
+  /** 公式栏编辑会话：记录本次聚焦时的格与原文，保证一次确认只提交一次、Esc 绝不落格 */
+  const barSession = useRef<{ addr: Addr; original: string; finished: boolean } | null>(
+    null,
+  );
   const [importErrors, setImportErrors] = useState<string[] | null>(null);
   const [hypOpen, setHypOpen] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -51,8 +55,10 @@ export function App() {
 
   const commit = useCallback(
     (addr: Addr, text: string) => {
+      const before = engine.getSnapshot().revision;
       engine.setCell(addr, text);
-      refresh();
+      // 空编辑（内容未变）不产生新修订，也无需刷新快照
+      if (engine.getSnapshot().revision !== before) refresh();
       setBarDraft(engine.getRaw(addr));
     },
     [engine, refresh],
@@ -239,22 +245,42 @@ export function App() {
             setBarDraft(e.target.value);
           }}
           onFocus={() => {
+            // 开启一次编辑会话，原文在此刻固定；Esc 时据此还原
+            barSession.current = {
+              addr: selected,
+              original: engine.getRaw(selected),
+              finished: false,
+            };
             setBarEditing(true);
             setBarDraft(engine.getRaw(selected));
           }}
           onBlur={() => {
-            if (barEditing) {
-              commit(selected, barDraft);
-              setBarEditing(false);
+            // Enter/Esc 已经终结过本次会话则忽略随后的 blur；
+            // 普通失焦视为确认（内容未变时引擎侧是空操作，不产生修订）
+            const session = barSession.current;
+            if (!session || session.finished) {
+              barSession.current = null;
+              return;
             }
+            session.finished = true;
+            commit(session.addr, barDraft);
+            barSession.current = null;
+            setBarEditing(false);
           }}
           onKeyDown={(e) => {
+            const session = barSession.current;
+            if (!session || session.finished) return;
             if (e.key === 'Enter') {
-              commit(selected, barDraft);
+              // 一次确认只形成一次提交：终结会话后再失焦，blur 不再提交
+              session.finished = true;
+              commit(session.addr, barDraft);
+              setBarEditing(false);
               (e.target as HTMLInputElement).blur();
               e.preventDefault();
             } else if (e.key === 'Escape') {
-              setBarDraft(engine.getRaw(selected));
+              // 取消：还原原文并终结会话，随后的 blur 不得写入任何草稿
+              session.finished = true;
+              setBarDraft(session.original);
               setBarEditing(false);
               (e.target as HTMLInputElement).blur();
               e.preventDefault();
