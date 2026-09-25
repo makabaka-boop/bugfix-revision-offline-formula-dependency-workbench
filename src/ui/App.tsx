@@ -31,6 +31,8 @@ export function App() {
   const [editing, setEditing] = useState<Addr | null>(null);
   const [barDraft, setBarDraft] = useState('');
   const [barEditing, setBarEditing] = useState(false);
+  // Enter/Esc 已在 keydown 中了结本次编辑时，随后的 blur 不得再提交一次
+  const barBlurSkipCommit = useRef(false);
   const [importErrors, setImportErrors] = useState<string[] | null>(null);
   const [hypOpen, setHypOpen] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -239,10 +241,16 @@ export function App() {
             setBarDraft(e.target.value);
           }}
           onFocus={() => {
+            barBlurSkipCommit.current = false;
             setBarEditing(true);
             setBarDraft(engine.getRaw(selected));
           }}
           onBlur={() => {
+            // Enter/Esc 引发的 blur：提交/还原已在 keydown 完成，这里不再动作
+            if (barBlurSkipCommit.current) {
+              barBlurSkipCommit.current = false;
+              return;
+            }
             if (barEditing) {
               commit(selected, barDraft);
               setBarEditing(false);
@@ -250,10 +258,15 @@ export function App() {
           }}
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
+              // 确认：只提交这一次；随后的 blur 不再重复提交
+              barBlurSkipCommit.current = true;
               commit(selected, barDraft);
+              setBarEditing(false);
               (e.target as HTMLInputElement).blur();
               e.preventDefault();
             } else if (e.key === 'Escape') {
+              // 取消：还原草稿，随后的 blur 不得把未确认内容写进正式格
+              barBlurSkipCommit.current = true;
               setBarDraft(engine.getRaw(selected));
               setBarEditing(false);
               (e.target as HTMLInputElement).blur();

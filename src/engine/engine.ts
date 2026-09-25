@@ -369,16 +369,21 @@ export class SheetEngine {
   /**
    * 单格编辑。非法输入不会拒绝编辑，而是让该格进入 parse 错误状态，
    * 仅影响该格及其下游；其他格结果不动。
+   *
+   * 内容与现有原始输入逐字符相同（或清空本已为空的格）时视为空编辑：
+   * 不重算、不递增修订号，快照保持不变——聚焦后原样离开不算一次修改。
    */
   setCell(key: Addr, text: string): EditResult {
     if (!inBounds(key)) {
       return { ok: false, errors: [`地址 ${key} 超出 A1..T20`] };
     }
-    const trimmed = text;
-    if (trimmed.trim() === '') {
+    if (text.trim() === '') {
+      // 清空本已为空的格：无变化
       if (!this.raw.has(key)) return { ok: true };
       this.raw.delete(key);
     } else {
+      // 未改一个字符：无变化
+      if (this.raw.get(key) === text) return { ok: true };
       this.raw.set(key, text);
     }
     this.recompute(new Set([key]));

@@ -206,6 +206,77 @@ describe('直接依赖可见', () => {
   });
 });
 
+describe('空编辑不产生新修订', () => {
+  // 含下游公式与错误传播的网格
+  const GRID = {
+    A1: '8',
+    A2: '3',
+    B1: '=A1+A2*2',
+    C1: '=B1-B2',
+    B2: '=A1/A2',
+    H1: '0',
+    H2: '=9/H1',
+    H3: '=H2+1',
+  };
+
+  it('原样提交已有内容：修订号不变、状态对象不变、导出逐字节一致', () => {
+    const e = make(GRID);
+    const before = e.getSnapshot();
+    const rev = before.revision;
+    const jsonBefore = exportSnapshot(before, new Date(0));
+
+    expect(e.setCell('A1', '8').ok).toBe(true); // 与原内容逐字符相同
+    expect(e.setCell('B1', '=A1+A2*2').ok).toBe(true); // 公式原样提交
+
+    const after = e.getSnapshot();
+    expect(after.revision).toBe(rev);
+    expect(after.states).toBe(before.states); // 未触发重算
+    expect(after.raw).toBe(before.raw);
+    expect(exportSnapshot(after, new Date(0))).toBe(jsonBefore);
+    // 下游与错误传播保持原样
+    expect(val(e, 'B1')).toBe('14');
+    expect(val(e, 'C1')).toBe('34/3');
+    expect(err(e, 'H2')!.type).toBe('divzero');
+    expect(err(e, 'H3')!.path).toEqual(['H2', 'H3']);
+  });
+
+  it('清空本已为空的格：不产生新修订', () => {
+    const e = make(GRID);
+    const rev = e.getSnapshot().revision;
+    e.setCell('T20', '');
+    e.setCell('T20', '   ');
+    expect(e.getSnapshot().revision).toBe(rev);
+  });
+
+  it('真实修改一次只递增一次修订号', () => {
+    const e = make(GRID);
+    const rev = e.getSnapshot().revision;
+    e.setCell('A1', '10');
+    expect(e.getSnapshot().revision).toBe(rev + 1);
+    expect(val(e, 'B1')).toBe('16');
+  });
+
+  it('空编辑不使有效预演过期；真实编辑才使预演过期', () => {
+    const e = make(GRID);
+    const p = e.previewHypothesis([{ addr: 'A1', raw: '5' }]);
+    // 两种空编辑：公式栏原样提交、网格编辑原样离开（引擎层等价于同文提交）
+    e.setCell('A1', '8');
+    e.setCell('B1', '=A1+A2*2');
+    const r = e.commitHypothesis(p);
+    expect(r.ok).toBe(true); // 预演仍可采纳
+    expect(val(e, 'A1')).toBe('5');
+    expect(val(e, 'B1')).toBe('11');
+
+    // 真实编辑才把修订号推前，使旧预演过期
+    const p2 = e.previewHypothesis([{ addr: 'A1', raw: '9' }]);
+    e.setCell('A1', '7');
+    const r2 = e.commitHypothesis(p2);
+    expect(r2.ok).toBe(false);
+    expect(r2.stale).toBe(true);
+    expect(val(e, 'A1')).toBe('7');
+  });
+});
+
 describe('导入：非法则整份拒绝并保留上次有效表', () => {
   it('非 JSON 拒绝', () => {
     expect(validateImport('not json').ok).toBe(false);
